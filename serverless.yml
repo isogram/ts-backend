@@ -1,0 +1,74 @@
+service: ts-backend
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  stage: \${opt:stage, 'dev'}
+  region: \${opt:region, 'us-east-1'}
+  environment:
+    NODE_ENV: production
+    DATABASE_HOST: \${ssm:/\${self:provider.stage}/database/host}
+    DATABASE_PORT: \${ssm:/\${self:provider.stage}/database/port}
+    DATABASE_USERNAME: \${ssm:/\${self:provider.stage}/database/username}
+    DATABASE_PASSWORD: \${ssm:/\${self:provider.stage}/database/password}
+    DATABASE_NAME: \${ssm:/\${self:provider.stage}/database/name}
+    JWT_SECRET: \${ssm:/\${self:provider.stage}/jwt/secret}
+    JWT_EXPIRATION: \${ssm:/\${self:provider.stage}/jwt/expiration}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource: "arn:aws:s3:::\${self:custom.s3BucketName}/*"
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource: 
+            - Fn::GetAtt: [TaskQueue, Arn]
+
+plugins:
+  - serverless-plugin-typescript
+  - serverless-offline
+  
+custom:
+  s3BucketName: ts-backend-uploads-\${self:provider.stage}
+  
+functions:
+  api:
+    handler: src/lambda.handler
+    events:
+      - httpApi:
+          path: "/{proxy+}"
+          method: ANY
+  
+  processTask:
+    handler: src/lambda.taskHandler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [TaskQueue, Arn]
+
+resources:
+  Resources:
+    TaskQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ts-backend-tasks-\${self:provider.stage}
+        VisibilityTimeout: 300
+    
+    UploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: \${self:custom.s3BucketName}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, PUT, POST, DELETE]
+              AllowedOrigins: ['*']
+              MaxAge: 3000
